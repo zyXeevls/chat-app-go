@@ -4,17 +4,24 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/joho/godotenv"
+	"github.com/zyXeevls/chat-app/internal/infrastructure/database"
 )
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal(".env file not found:", err)
+	}
+
+	db := database.NewPostgres()
+	defer db.Close()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Realtime Chat Server Running.")
 	})
 
-	fmt.Println("Server Running on :8080")
-
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
-	}
+	log.Println("Server running on :8080")
+	http.ListenAndServe(":8080", nil)
 }
