@@ -1,29 +1,38 @@
 package websocket
 
+import (
+	"log"
+
+	"github.com/zyXeevls/chat-app/internal/repository"
+)
+
 type Hub struct {
 	clients map[*Client]bool
+	rooms   map[string]map[*Client]bool
 
-	rooms map[string]map[*Client]bool
-
-	register chan *Client
-
+	register   chan *Client
 	unregister chan *Client
+	broadcast  chan *RoomMessage
 
-	broadcast chan *RoomMessage
+	messageRepo *repository.MessageRepository
 }
 
 type RoomMessage struct {
-	roomID  string
-	message []byte
+	roomID   string
+	senderID string
+	content  string
+	raw      []byte
+	message  []byte
 }
 
-func NewHub() *Hub {
+func NewHub(repo *repository.MessageRepository) *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		rooms:      make(map[string]map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan *RoomMessage),
+		clients:     make(map[*Client]bool),
+		rooms:       make(map[string]map[*Client]bool),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		broadcast:   make(chan *RoomMessage),
+		messageRepo: repo,
 	}
 }
 
@@ -64,9 +73,24 @@ func (h *Hub) Run() {
 
 		case msg := <-h.broadcast:
 			clients := h.rooms[msg.roomID]
+
+			if msg.senderID != "" && msg.content != "" {
+				err := h.messageRepo.SaveMessage(
+					msg.roomID,
+					msg.senderID,
+					msg.content,
+					"text",
+				)
+				if err != nil {
+					log.Printf("Error saving message: %v", err)
+				} else {
+					log.Printf("Message saved - Room: %s, Sender: %s, Content: %s", msg.roomID, msg.senderID, msg.content)
+				}
+			}
+
 			for client := range clients {
 				select {
-				case client.send <- msg.message:
+				case client.send <- msg.raw:
 				default:
 					close(client.send)
 					delete(clients, client)

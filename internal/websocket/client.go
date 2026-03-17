@@ -70,13 +70,17 @@ func (c *Client) readPump() {
 			}
 
 		case "send_message":
-			var roomMessage RoomMessage
-			err = json.Unmarshal(message, &roomMessage)
-			if err != nil {
-				log.Println("invalid message format")
-				continue
+			var msg ChatMessage
+
+			data, _ := json.Marshal(event.Data)
+			json.Unmarshal(data, &msg)
+
+			c.hub.broadcast <- &RoomMessage{
+				roomID:   msg.RoomID,
+				senderID: c.userID,
+				content:  msg.Message,
+				raw:      message,
 			}
-			c.hub.broadcast <- &roomMessage
 		default:
 			log.Println("unknown event", event.Event)
 		}

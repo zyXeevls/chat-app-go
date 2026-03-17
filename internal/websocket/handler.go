@@ -19,6 +19,9 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = "anonymous"
+	}
 
 	client := &Client{
 		hub:    hub,

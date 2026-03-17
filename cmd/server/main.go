@@ -5,7 +5,9 @@ import (
 	"net/http"
 
 	"github.com/joho/godotenv"
+	httpHandler "github.com/zyXeevls/chat-app/internal/delivery/http"
 	"github.com/zyXeevls/chat-app/internal/infrastructure/database"
+	"github.com/zyXeevls/chat-app/internal/repository"
 	"github.com/zyXeevls/chat-app/internal/websocket"
 )
 
@@ -15,7 +17,10 @@ func main() {
 	db := database.NewPostgres()
 	defer db.Close()
 
-	hub := websocket.NewHub()
+	messageRepo := repository.NewMessageRepository(db)
+
+	hub := websocket.NewHub(messageRepo)
+	msgHandler := httpHandler.NewMessageHandler(db)
 
 	go hub.Run()
 
@@ -23,7 +28,8 @@ func main() {
 		websocket.ServeWs(hub, w, r)
 	})
 
-	log.Println("Server running on :8080")
+	http.HandleFunc("/messages", msgHandler.GetMessage)
 
+	log.Println("Server running on :8080")
 	http.ListenAndServe(":8080", nil)
 }
