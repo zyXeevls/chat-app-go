@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"log"
 
 	"github.com/gorilla/websocket"
@@ -27,7 +28,21 @@ func (c *Client) readPump() {
 			break
 		}
 
-		c.hub.broadcast <- message
+		var event Event
+
+		err = json.Unmarshal(message, &event)
+
+		if err != nil {
+			log.Println("invalid event")
+			continue
+		}
+
+		switch event.Event {
+		case "send_message":
+			c.hub.broadcast <- message
+		default:
+			log.Println("unknown event", event.Event)
+		}
 	}
 }
 
