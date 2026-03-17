@@ -8,20 +8,20 @@ import (
 )
 
 type Client struct {
-	hub *Hub
-
-	com *websocket.Conn
-
+	hub  *Hub
+	conn *websocket.Conn
 	send chan []byte
+
+	userID string
 }
 
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
-		c.com.Close()
+		c.conn.Close()
 	}()
 	for {
-		_, message, err := c.com.ReadMessage()
+		_, message, err := c.conn.ReadMessage()
 
 		if err != nil {
 			log.Println(err)
@@ -47,6 +47,28 @@ func (c *Client) readPump() {
 			json.Unmarshal(data, &room)
 			c.hub.JoinRoom(room.RoomID, c)
 
+		case "typing_start":
+			var t TypingEvent
+
+			data, _ := json.Marshal(event.Data)
+			json.Unmarshal(data, &t)
+
+			c.hub.broadcast <- &RoomMessage{
+				roomID:  t.RoomID,
+				message: message,
+			}
+
+		case "typing_stop":
+			var t TypingEvent
+
+			data, _ := json.Marshal(event.Data)
+			json.Unmarshal(data, &t)
+
+			c.hub.broadcast <- &RoomMessage{
+				roomID:  t.RoomID,
+				message: message,
+			}
+
 		case "send_message":
 			var roomMessage RoomMessage
 			err = json.Unmarshal(message, &roomMessage)
@@ -62,16 +84,16 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
-	defer c.com.Close()
+	defer c.conn.Close()
 	for {
 		message, ok := <-c.send
 
 		if !ok {
-			c.com.WriteMessage(websocket.CloseMessage, []byte{})
+			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 			return
 		}
 
-		err := c.com.WriteMessage(websocket.TextMessage, message)
+		err := c.conn.WriteMessage(websocket.TextMessage, message)
 
 		if err != nil {
 			return

@@ -33,8 +33,31 @@ func (h *Hub) Run() {
 		case client := <-h.register:
 			h.clients[client] = true
 
+			msg := []byte(`{
+				"event":"user_online",
+				"data":{"user_id":"` + client.userID + `"}
+			}`)
+
+			for c := range h.clients {
+				if c != client {
+					c.send <- msg
+				}
+			}
+
 		case client := <-h.unregister:
 			delete(h.clients, client)
+
+			msg := []byte(`{
+				"event":"user_offline",
+				"data":{"user_id":"` + client.userID + `"}
+			}`)
+
+			for c := range h.clients {
+				if c != client {
+					c.send <- msg
+				}
+			}
+
 			for roomID := range h.rooms {
 				delete(h.rooms[roomID], client)
 			}
