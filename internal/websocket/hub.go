@@ -3,19 +3,27 @@ package websocket
 type Hub struct {
 	clients map[*Client]bool
 
+	rooms map[string]map[*Client]bool
+
 	register chan *Client
 
 	unregister chan *Client
 
-	broadcast chan []byte
+	broadcast chan *RoomMessage
+}
+
+type RoomMessage struct {
+	roomID  string
+	message []byte
 }
 
 func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
+		rooms:      make(map[string]map[*Client]bool),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
-		broadcast:  make(chan []byte),
+		broadcast:  make(chan *RoomMessage),
 	}
 }
 
@@ -26,20 +34,29 @@ func (h *Hub) Run() {
 			h.clients[client] = true
 
 		case client := <-h.unregister:
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				close(client.send)
+			delete(h.clients, client)
+			for roomID := range h.rooms {
+				delete(h.rooms[roomID], client)
 			}
 
-		case message := <-h.broadcast:
-			for client := range h.clients {
+		case msg := <-h.broadcast:
+			clients := h.rooms[msg.roomID]
+			for client := range clients {
 				select {
-				case client.send <- message:
+				case client.send <- msg.message:
 				default:
 					close(client.send)
-					delete(h.clients, client)
+					delete(clients, client)
 				}
 			}
 		}
 	}
+}
+
+func (h *Hub) JoinRoom(roomID string, client *Client) {
+	if h.rooms[roomID] == nil {
+		h.rooms[roomID] = make(map[*Client]bool)
+	}
+
+	h.rooms[roomID][client] = true
 }
