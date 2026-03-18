@@ -11,12 +11,13 @@ type Message struct {
 }
 
 type ChatMessage struct {
-	ID      string `json:"id"`
-	RoomID  string `json:"room_id"`
-	Message string `json:"message"`
-	Content string `json:"content,omitempty"`
-	FileURL string `json:"file_url,omitempty"`
-	Type    string `json:"type"`
+	ID         string `json:"id"`
+	RoomID     string `json:"room_id"`
+	ReceiverID string `json:"receiver_id,omitempty"`
+	Message    string `json:"message"`
+	Content    string `json:"content,omitempty"`
+	FileURL    string `json:"file_url,omitempty"`
+	Type       string `json:"type"`
 }
 
 type TypingEvent struct {

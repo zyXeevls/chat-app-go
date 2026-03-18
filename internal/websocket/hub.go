@@ -19,9 +19,10 @@ type Hub struct {
 	unregister chan *Client
 	broadcast  chan *RoomMessage
 
-	messageRepo *repository.MessageRepository
-	redis       *redis.Client
-	presence    *usecase.PresenceUseCase
+	messageRepo   *repository.MessageRepository
+	redis         *redis.Client
+	presence      *usecase.PresenceUseCase
+	unreadUsecase *usecase.UnreadUseCase
 }
 
 type RoomMessage struct {
@@ -34,16 +35,17 @@ type RoomMessage struct {
 	Persist  bool   `json:"persist"`
 }
 
-func NewHub(repo *repository.MessageRepository, redisClient *redis.Client, presenceUseCase *usecase.PresenceUseCase) *Hub {
+func NewHub(repo *repository.MessageRepository, redisClient *redis.Client, presenceUseCase *usecase.PresenceUseCase, unreadUseCase *usecase.UnreadUseCase) *Hub {
 	return &Hub{
-		clients:     make(map[*Client]bool),
-		rooms:       make(map[string]map[*Client]bool),
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		broadcast:   make(chan *RoomMessage),
-		messageRepo: repo,
-		redis:       redisClient,
-		presence:    presenceUseCase,
+		clients:       make(map[*Client]bool),
+		rooms:         make(map[string]map[*Client]bool),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		broadcast:     make(chan *RoomMessage),
+		messageRepo:   repo,
+		redis:         redisClient,
+		presence:      presenceUseCase,
+		unreadUsecase: unreadUseCase,
 	}
 }
 

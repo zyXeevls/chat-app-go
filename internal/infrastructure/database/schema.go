@@ -43,6 +43,13 @@ func EnsureSchema(db *pgxpool.Pool) error {
 		created_at TIMESTAMP NOT NULL DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS unread_counts (
+		user_id TEXT NOT NULL,
+		room_id TEXT NOT NULL,
+		count INT NOT NULL DEFAULT 0,
+		PRIMARY KEY (user_id, room_id)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_messages_room_created_at
 	ON messages(room_id, created_at);
 	`

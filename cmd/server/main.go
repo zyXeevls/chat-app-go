@@ -28,12 +28,15 @@ func main() {
 	messageRepo := repository.NewMessageRepository(db)
 	authRepo := repository.NewAuthRepository(db)
 	presenceRepo := &repository.PresenceRepository{Redis: redisClient}
+	unreadRepo := &repository.UnreadRepository{DB: db}
 	presenceUseCase := usecase.NewPresenceUseCase(presenceRepo)
+	unreadUseCase := usecase.NewUnreadUseCase(unreadRepo)
 
-	hub := websocket.NewHub(messageRepo, redisClient, presenceUseCase)
+	hub := websocket.NewHub(messageRepo, redisClient, presenceUseCase, unreadUseCase)
 	msgHandler := httpHandler.NewMessageHandler(db)
 	uploadHandler := httpHandler.NewUploadHandler()
 	presenceHandler := httpHandler.NewPresenceHandler(presenceUseCase)
+	unreadHandler := httpHandler.NewUnreadHandler(unreadUseCase)
 	authHandler := httpHandler.NewAuthHandler(authRepo)
 	fs := http.FileServer(http.Dir("./uploads"))
 
@@ -47,6 +50,8 @@ func main() {
 	http.HandleFunc("/messages", msgHandler.GetMessage)
 	http.HandleFunc("/upload", uploadHandler.UploadFile)
 	http.HandleFunc("/presence", presenceHandler.GetStatus)
+	http.HandleFunc("/unread", unreadHandler.GetUnread)
+	http.HandleFunc("/unread/clear", unreadHandler.ClearUnread)
 	http.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
 
 	log.Println("Server running on :8080")

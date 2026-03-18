@@ -183,6 +183,11 @@ func (c *Client) readPump() {
 
 			msg.ID = uuid.New().String()
 
+			receiverID := msg.ReceiverID
+			if receiverID != "" && receiverID != c.userID && c.hub != nil && c.hub.unreadUsecase != nil {
+				go c.hub.unreadUsecase.AddUnread(receiverID, msg.RoomID)
+			}
+
 			newMsg, _ := json.Marshal(map[string]interface{}{
 				"event": "receive_message",
 				"data": map[string]interface{}{
