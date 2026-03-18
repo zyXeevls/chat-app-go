@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+      - redis
+    environment:
+      - BASE_URL=http://localhost:8080
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/db_chat_app?sslmode=disable
+      - REDIS_ADDR=redis:6379
+
+  db:
+    image: postgres
+    pull_policy: never
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: db_chat_app
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis
+    pull_policy: never
+    ports:
+      - "6379:6379"
