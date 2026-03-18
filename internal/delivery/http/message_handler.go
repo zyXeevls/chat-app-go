@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,12 +30,27 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page, _ := strconv.Atoi(pageStr)
+	limit, _ := strconv.Atoi(limitStr)
+
+	if page == 0 {
+		page = 1
+	}
+
+	if limit == 0 {
+		limit = 20
+	}
+
 	rows, err := h.DB.Query(context.Background(),
 		`SELECT room_id, sender_id, content, created_at
 		FROM messages 
 		WHERE room_id = $1 
-		ORDER BY created_at ASC`,
-		roomID,
+		ORDER BY created_at ASC
+		LIMIT $2 OFFSET $3`,
+		roomID, limit, (page-1)*limit,
 	)
 
 	if err != nil {
@@ -44,6 +60,7 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	messages := []map[string]interface{}{}
+
 	for rows.Next() {
 		var roomID, senderID, content string
 		var createdAt time.Time

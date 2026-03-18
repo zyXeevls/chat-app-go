@@ -2,9 +2,21 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type Message struct {
+	ID        string
+	RoomID    string
+	SenderID  string
+	Content   string
+	FileURL   string
+	Type      string
+	Status    string
+	CreatedAt time.Time
+}
 
 type MessageRepository struct {
 	DB *pgxpool.Pool
@@ -37,6 +49,45 @@ func (r *MessageRepository) SaveMessage(
 	return err
 }
 
+func (r *MessageRepository) GetMessage(roomID string, messageID string, page int, limit int) ([]Message, error) {
+	offset := (page - 1) * limit
+
+	query := `
+		SELECT id, room_id, sender_id,content, file_url, type, status, created_at
+		FROM messages
+		WHERE room_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+		`
+
+	rows, err := r.DB.Query(context.Background(), query, roomID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []Message
+
+	for rows.Next() {
+		var m Message
+		err := rows.Scan(
+			&m.ID,
+			&m.RoomID,
+			&m.SenderID,
+			&m.Content,
+			&m.FileURL,
+			&m.Type,
+			&m.Status,
+			&m.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
 func (r *MessageRepository) UpdateStatus(messageID string, status string) error {
 	query := `
 		UPDATE messages
@@ -52,8 +103,6 @@ func (r *MessageRepository) UpdateStatus(messageID string, status string) error 
 	return err
 }
 
-// CanUserAccessRoom verifies if user has access to the room
-// Returns true if user is a member of the room
 func (r *MessageRepository) CanUserAccessRoom(userID, roomID string) (bool, error) {
 	query := `
 		SELECT EXISTS (
