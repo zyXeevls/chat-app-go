@@ -21,15 +21,18 @@ func main() {
 
 	hub := websocket.NewHub(messageRepo)
 	msgHandler := httpHandler.NewMessageHandler(db)
+	uploadHandler := httpHandler.NewUploadHandler()
+	fs := http.FileServer(http.Dir("./uploads"))
 
 	go hub.Run()
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeWs(hub, w, r)
 	})
-
 	http.HandleFunc("/messages", msgHandler.GetMessage)
+	http.HandleFunc("/upload", uploadHandler.UploadFile)
+	http.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
 
 	log.Println("Server running on :8080")
-	http.ListenAndServe(":8080", nil)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
