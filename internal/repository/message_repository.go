@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -107,10 +109,10 @@ func (r *MessageRepository) CanUserAccessRoom(userID, roomID string) (bool, erro
 	query := `
 		SELECT EXISTS (
 			SELECT 1 FROM room_members 
-			WHERE user_id = $1 AND room_id = $2
+			WHERE user_id::text = $1 AND room_id::text = $2
 		) OR EXISTS (
 			SELECT 1 FROM rooms 
-			WHERE id = $2 AND created_by = $1
+			WHERE id::text = $2 AND created_by::text = $1
 		)
 	`
 
@@ -121,4 +123,57 @@ func (r *MessageRepository) CanUserAccessRoom(userID, roomID string) (bool, erro
 	}
 
 	return hasAccess, nil
+}
+
+func (r *MessageRepository) EnsureUserRoomAccess(userID, roomRef string) (string, error) {
+	roomID, err := r.ResolveRoomID(roomRef)
+	if err != nil {
+		return "", err
+	}
+
+	if roomID == "" {
+		createRoomQuery := `
+			INSERT INTO rooms (id, name, type, created_by)
+			VALUES (gen_random_uuid()::text, $1, 'group', $2)
+			RETURNING id::text
+		`
+
+		err = r.DB.QueryRow(context.Background(), createRoomQuery, roomRef, userID).Scan(&roomID)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	joinQuery := `
+		INSERT INTO room_members (user_id, room_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, room_id) DO NOTHING
+	`
+
+	_, err = r.DB.Exec(context.Background(), joinQuery, userID, roomID)
+	if err != nil {
+		return "", err
+	}
+
+	return roomID, nil
+}
+
+func (r *MessageRepository) ResolveRoomID(roomRef string) (string, error) {
+	query := `
+		SELECT id::text
+		FROM rooms
+		WHERE id::text = $1 OR name = $1
+		LIMIT 1
+	`
+
+	var roomID string
+	err := r.DB.QueryRow(context.Background(), query, roomRef).Scan(&roomID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return roomID, nil
 }

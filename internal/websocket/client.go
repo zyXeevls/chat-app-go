@@ -48,7 +48,40 @@ func (c *Client) readPump() {
 
 			data, _ := json.Marshal(event.Data)
 			json.Unmarshal(data, &room)
-			c.hub.JoinRoom(room.RoomID, c)
+
+			if room.RoomID == "" {
+				resp, _ := json.Marshal(map[string]interface{}{
+					"event": "join_room_error",
+					"data": map[string]interface{}{
+						"room_id": room.RoomID,
+						"reason":  "room_id is required",
+					},
+				})
+				c.send <- resp
+				continue
+			}
+
+			joinedRoomID, err := c.hub.JoinRoom(room.RoomID, c)
+			if err != nil {
+				resp, _ := json.Marshal(map[string]interface{}{
+					"event": "join_room_error",
+					"data": map[string]interface{}{
+						"room_id": room.RoomID,
+						"reason":  err.Error(),
+					},
+				})
+				c.send <- resp
+				continue
+			}
+
+			okResp, _ := json.Marshal(map[string]interface{}{
+				"event": "join_room_ok",
+				"data": map[string]interface{}{
+					"room_id":          room.RoomID,
+					"resolved_room_id": joinedRoomID,
+				},
+			})
+			c.send <- okResp
 
 		case "typing_start":
 			var t TypingEvent
@@ -62,8 +95,9 @@ func (c *Client) readPump() {
 			}
 
 			c.hub.broadcast <- &RoomMessage{
-				roomID:  t.RoomID,
-				message: message,
+				RoomID:  t.RoomID,
+				Raw:     message,
+				Persist: false,
 			}
 
 		case "typing_stop":
@@ -78,8 +112,9 @@ func (c *Client) readPump() {
 			}
 
 			c.hub.broadcast <- &RoomMessage{
-				roomID:  t.RoomID,
-				message: message,
+				RoomID:  t.RoomID,
+				Raw:     message,
+				Persist: false,
 			}
 
 		case "send_message":
@@ -89,8 +124,34 @@ func (c *Client) readPump() {
 			json.Unmarshal(data, &msg)
 
 			if !c.joinedRooms[msg.RoomID] {
-				log.Printf("Unauthorized: User %s tidak bisa send message ke room %s", c.userID, msg.RoomID)
-				continue
+				joinedRoomID, err := c.hub.JoinRoom(msg.RoomID, c)
+				if err != nil {
+					log.Printf("Unauthorized: User %s tidak bisa send message ke room %s: %v", c.userID, msg.RoomID, err)
+
+					resp, _ := json.Marshal(map[string]interface{}{
+						"event": "send_message_error",
+						"data": map[string]interface{}{
+							"room_id": msg.RoomID,
+							"reason":  err.Error(),
+						},
+					})
+					c.send <- resp
+					continue
+				}
+
+				msg.RoomID = joinedRoomID
+			}
+
+			if msg.Message == "" {
+				msg.Message = msg.Content
+			}
+
+			if msg.Type == "" {
+				if msg.FileURL != "" {
+					msg.Type = "file"
+				} else {
+					msg.Type = "text"
+				}
 			}
 
 			msg.ID = uuid.New().String()
@@ -109,12 +170,13 @@ func (c *Client) readPump() {
 			})
 
 			c.hub.broadcast <- &RoomMessage{
-				roomID:   msg.RoomID,
-				senderID: c.userID,
-				content:  msg.Message,
-				fileURL:  msg.FileURL,
-				msgType:  msg.Type,
-				raw:      newMsg,
+				RoomID:   msg.RoomID,
+				SenderID: c.userID,
+				Content:  msg.Message,
+				FileURL:  msg.FileURL,
+				MsgType:  msg.Type,
+				Raw:      newMsg,
+				Persist:  true,
 			}
 
 		case "message_delivered":
@@ -132,8 +194,9 @@ func (c *Client) readPump() {
 			go c.hub.messageRepo.UpdateStatus(data.MessageID, "delivered")
 
 			c.hub.broadcast <- &RoomMessage{
-				roomID: c.currentRoom,
-				raw:    message,
+				RoomID:  c.currentRoom,
+				Raw:     message,
+				Persist: false,
 			}
 
 		case "message_read":
@@ -152,8 +215,9 @@ func (c *Client) readPump() {
 			go c.hub.messageRepo.UpdateStatus(data.MessageID, "read")
 
 			c.hub.broadcast <- &RoomMessage{
-				roomID: c.currentRoom,
-				raw:    message,
+				RoomID:  c.currentRoom,
+				Raw:     message,
+				Persist: false,
 			}
 
 		default:

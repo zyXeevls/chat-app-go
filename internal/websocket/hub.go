@@ -1,8 +1,12 @@
 package websocket
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zyXeevls/chat-app/internal/repository"
 )
 
@@ -15,19 +19,20 @@ type Hub struct {
 	broadcast  chan *RoomMessage
 
 	messageRepo *repository.MessageRepository
+	redis       *redis.Client
 }
 
 type RoomMessage struct {
-	roomID   string
-	senderID string
-	content  string
-	fileURL  string
-	msgType  string
-	raw      []byte
-	message  []byte
+	RoomID   string `json:"room_id"`
+	SenderID string `json:"sender_id,omitempty"`
+	Content  string `json:"content,omitempty"`
+	FileURL  string `json:"file_url,omitempty"`
+	MsgType  string `json:"msg_type,omitempty"`
+	Raw      []byte `json:"raw"`
+	Persist  bool   `json:"persist"`
 }
 
-func NewHub(repo *repository.MessageRepository) *Hub {
+func NewHub(repo *repository.MessageRepository, redisClient *redis.Client) *Hub {
 	return &Hub{
 		clients:     make(map[*Client]bool),
 		rooms:       make(map[string]map[*Client]bool),
@@ -35,10 +40,15 @@ func NewHub(repo *repository.MessageRepository) *Hub {
 		unregister:  make(chan *Client),
 		broadcast:   make(chan *RoomMessage),
 		messageRepo: repo,
+		redis:       redisClient,
 	}
 }
 
 func (h *Hub) Run() {
+	if h.redis != nil {
+		go h.subscribe()
+	}
+
 	for {
 		select {
 		case client := <-h.register:
@@ -74,45 +84,107 @@ func (h *Hub) Run() {
 			}
 
 		case msg := <-h.broadcast:
-			clients := h.rooms[msg.roomID]
-
-			if msg.senderID != "" && msg.content != "" {
+			if msg.Persist && msg.SenderID != "" && msg.RoomID != "" && (msg.Content != "" || msg.FileURL != "") {
 				err := h.messageRepo.SaveMessage(
-					msg.roomID,
-					msg.senderID,
-					msg.content,
-					"text",
-					msg.fileURL,
+					msg.RoomID,
+					msg.SenderID,
+					msg.Content,
+					msg.FileURL,
+					msg.MsgType,
 				)
 				if err != nil {
 					log.Printf("Error saving message: %v", err)
 				} else {
-					log.Printf("Message saved - Room: %s, Sender: %s, Content: %s", msg.roomID, msg.senderID, msg.content)
+					log.Printf("Message saved - Room: %s, Sender: %s, Content: %s", msg.RoomID, msg.SenderID, msg.Content)
 				}
 			}
 
-			for client := range clients {
-				select {
-				case client.send <- msg.raw:
-				default:
-					close(client.send)
-					delete(clients, client)
+			if h.redis != nil {
+				if err := h.publish(*msg); err != nil {
+					log.Printf("Redis publish failed, fallback local broadcast: %v", err)
+					h.dispatch(msg)
 				}
+				continue
 			}
+
+			h.dispatch(msg)
 		}
 	}
 }
 
-func (h *Hub) JoinRoom(roomID string, client *Client) {
+func (h *Hub) dispatch(msg *RoomMessage) {
+	clients := h.rooms[msg.RoomID]
+
+	for client := range clients {
+		select {
+		case client.send <- msg.Raw:
+		default:
+			close(client.send)
+			delete(clients, client)
+		}
+	}
+}
+
+func (h *Hub) publish(msg RoomMessage) error {
+	data, _ := json.Marshal(msg)
+	return h.redis.Publish(context.Background(), "chat", data).Err()
+}
+
+func (h *Hub) subscribe() {
+	pubsub := h.redis.Subscribe(context.Background(), "chat")
+
+	for {
+		msg, err := pubsub.ReceiveMessage(context.Background())
+		if err != nil {
+			log.Printf("Redis subscribe receive error: %v", err)
+			continue
+		}
+
+		var rm RoomMessage
+		if err := json.Unmarshal([]byte(msg.Payload), &rm); err != nil {
+			log.Printf("Redis payload parse error: %v", err)
+			continue
+		}
+
+		h.dispatch(&rm)
+	}
+}
+
+func (h *Hub) JoinRoom(roomRef string, client *Client) (string, error) {
+	roomID, err := h.messageRepo.ResolveRoomID(roomRef)
+	if err != nil {
+		log.Printf("Error resolving room %s for user %s: %v", roomRef, client.userID, err)
+		return "", fmt.Errorf("failed to resolve room: %w", err)
+	}
+
+	if roomID == "" {
+		roomID = roomRef
+	}
+
 	canAccess, err := h.messageRepo.CanUserAccessRoom(client.userID, roomID)
 	if err != nil {
 		log.Printf("Error checking room access for user %s in room %s: %v", client.userID, roomID, err)
-		return
+		return "", fmt.Errorf("failed to verify room access: %w", err)
 	}
 
 	if !canAccess {
-		log.Printf("Access denied: User %s tidak bisa join room %s", client.userID, roomID)
-		return
+		provisionedRoomID, err := h.messageRepo.EnsureUserRoomAccess(client.userID, roomRef)
+		if err != nil {
+			log.Printf("Access denied: User %s tidak bisa join room %s", client.userID, roomID)
+			return "", fmt.Errorf("access denied for room %s", roomRef)
+		}
+
+		roomID = provisionedRoomID
+
+		canAccess, err = h.messageRepo.CanUserAccessRoom(client.userID, roomID)
+		if err != nil {
+			return "", fmt.Errorf("failed to verify room access after provision: %w", err)
+		}
+
+		if !canAccess {
+			log.Printf("Access denied after provision: User %s tidak bisa join room %s", client.userID, roomID)
+			return "", fmt.Errorf("access denied for room %s", roomID)
+		}
 	}
 
 	if h.rooms[roomID] == nil {
@@ -122,4 +194,6 @@ func (h *Hub) JoinRoom(roomID string, client *Client) {
 	h.rooms[roomID][client] = true
 	client.joinedRooms[roomID] = true
 	client.currentRoom = roomID
+
+	return roomID, nil
 }

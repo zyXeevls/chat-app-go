@@ -17,10 +17,17 @@ func main() {
 	db := database.NewPostgres()
 	defer db.Close()
 
+	if err := database.EnsureSchema(db); err != nil {
+		log.Fatalf("failed to ensure database schema: %v", err)
+	}
+
+	redisClient := database.NewRedis()
+	defer redisClient.Close()
+
 	messageRepo := repository.NewMessageRepository(db)
 	authRepo := repository.NewAuthRepository(db)
 
-	hub := websocket.NewHub(messageRepo)
+	hub := websocket.NewHub(messageRepo, redisClient)
 	msgHandler := httpHandler.NewMessageHandler(db)
 	uploadHandler := httpHandler.NewUploadHandler()
 	authHandler := httpHandler.NewAuthHandler(authRepo)
