@@ -18,14 +18,18 @@ func main() {
 	defer db.Close()
 
 	messageRepo := repository.NewMessageRepository(db)
+	authRepo := repository.NewAuthRepository(db)
 
 	hub := websocket.NewHub(messageRepo)
 	msgHandler := httpHandler.NewMessageHandler(db)
 	uploadHandler := httpHandler.NewUploadHandler()
+	authHandler := httpHandler.NewAuthHandler(authRepo)
 	fs := http.FileServer(http.Dir("./uploads"))
 
 	go hub.Run()
 
+	http.HandleFunc("/register", authHandler.Register)
+	http.HandleFunc("/login", authHandler.Login)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		websocket.ServeWs(hub, w, r)
 	})

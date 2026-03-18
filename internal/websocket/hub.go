@@ -21,6 +21,8 @@ type RoomMessage struct {
 	roomID   string
 	senderID string
 	content  string
+	fileURL  string
+	msgType  string
 	raw      []byte
 	message  []byte
 }
@@ -80,6 +82,7 @@ func (h *Hub) Run() {
 					msg.senderID,
 					msg.content,
 					"text",
+					msg.fileURL,
 				)
 				if err != nil {
 					log.Printf("Error saving message: %v", err)
@@ -101,9 +104,22 @@ func (h *Hub) Run() {
 }
 
 func (h *Hub) JoinRoom(roomID string, client *Client) {
+	canAccess, err := h.messageRepo.CanUserAccessRoom(client.userID, roomID)
+	if err != nil {
+		log.Printf("Error checking room access for user %s in room %s: %v", client.userID, roomID, err)
+		return
+	}
+
+	if !canAccess {
+		log.Printf("Access denied: User %s tidak bisa join room %s", client.userID, roomID)
+		return
+	}
+
 	if h.rooms[roomID] == nil {
 		h.rooms[roomID] = make(map[*Client]bool)
 	}
 
 	h.rooms[roomID][client] = true
+	client.joinedRooms[roomID] = true
+	client.currentRoom = roomID
 }
