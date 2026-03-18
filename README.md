@@ -8,6 +8,7 @@ Backend chat realtime dengan pendekatan Clean Architecture yang dirancang agar m
 
 - Backend: Go
 - Realtime Transport: WebSocket (Gorilla WebSocket)
+- Distributed Realtime Bus: Redis Pub/Sub (`go-redis/v9`)
 - Database: PostgreSQL (pgx)
 - File Storage: Local storage (`/uploads`) dengan opsi migrasi ke S3 compatible (MinIO, AWS S3)
 - Auth: JWT
@@ -21,23 +22,41 @@ Client (Web / Mobile)
         v
 API Gateway / HTTP Server
         |
-        v
-Application Layer (Usecase)
-        |
-        v
-Domain Layer (Entities)
-        |
-        v
-Repository Layer
-        |
-        v
-PostgreSQL
+        | Redis Pub/Sub (cross-instance broadcast)
+        +-----------------------------+
+        |                             |
+        v                             v
+WebSocket Hub (Instance A)      WebSocket Hub (Instance B)
+        |                             |
+        +-------------+---------------+
+                      |
+                      v
+               Application Layer (Usecase)
+                      |
+                      v
+                  Domain Layer
+                      |
+                      v
+                Repository Layer
+                      |
+                      v
+                  PostgreSQL
 ```
 
 ### Realtime Flow
 
 ```text
-User A -> WebSocket -> Server -> Broadcast -> User B
+User A -> WebSocket -> Hub A -> Redis Publish -> Redis Subscribe -> Hub B -> User B
+```
+
+### Startup Bootstrap Flow
+
+```text
+Server start
+-> Connect PostgreSQL
+-> EnsureSchema() (auto create tables/index)
+-> Connect Redis
+-> Run Hub (subscribe channel chat)
 ```
 
 ## 2. Fitur Utama
@@ -45,7 +64,7 @@ User A -> WebSocket -> Server -> Broadcast -> User B
 ### 2.1 Realtime Messaging
 
 - Kirim pesan ke room
-- Terima pesan realtime
+- Terima pesan realtime (local + cross-instance via Redis)
 - Simpan histori pesan ke PostgreSQL
 - Ambil histori via REST (pagination)
 
@@ -77,6 +96,13 @@ Tipe room:
 
 - Private chat
 - Group chat
+
+Kemampuan room management yang sudah diimplementasikan:
+
+- Resolve room berdasarkan `room_id` atau `room name`
+- Auto create room saat room belum ada
+- Auto join user ke `room_members` saat akses belum ada
+- Return `resolved_room_id` ke client
 
 Tabel inti:
 
@@ -124,7 +150,9 @@ chat-app
 |   |-- domain/                  # entity domain (saat ini masih kosong)
 |   |-- infrastructure/
 |   |   |-- database/
-|   |   |   `-- postgres.go
+|   |   |   |-- postgres.go
+|   |   |   |-- redis.go
+|   |   |   `-- schema.go
 |   |   `-- storage/
 |   |
 |   |-- repository/
@@ -155,7 +183,7 @@ chat-app
 - Usecase layer: business logic aplikasi
 - Domain layer: entity/value object/interface contract
 - Repository layer: akses data PostgreSQL
-- Infrastructure layer: detail teknis DB/storage
+- Infrastructure layer: detail teknis DB/storage/Redis
 
 ## 4. Domain Entity (Blueprint)
 
@@ -197,6 +225,8 @@ Pattern utama yang dipakai:
 - Unregister client
 - Broadcast event per room
 - Persist message saat event `send_message`
+- Publish event ke Redis channel `chat`
+- Subscribe channel `chat` untuk menerima event dari instance lain
 
 Blueprint struktur hub:
 
@@ -207,104 +237,65 @@ type Hub struct {
     register   chan *Client
     unregister chan *Client
     broadcast  chan *RoomMessage
+    redis      *redis.Client
 }
 ```
 
-Loop inti (ringkas):
+Flow broadcast saat Redis aktif:
 
-```go
-for {
-    select {
-    case client := <-h.register:
-        h.clients[client] = true
-    case client := <-h.unregister:
-        delete(h.clients, client)
-    case msg := <-h.broadcast:
-        for c := range h.rooms[msg.roomID] {
-            c.send <- msg.raw
-        }
-    }
-}
+```text
+Client -> h.broadcast
+      -> SaveMessage (jika Persist=true)
+      -> Redis publish channel chat
+      -> Semua instance subscribe channel chat
+      -> dispatch ke client room lokal
 ```
+
+Fallback:
+
+- Jika publish Redis gagal, server fallback ke local dispatch.
 
 ## 6. Database Design
 
-Skema konseptual:
+Implementasi saat ini memakai auto-bootstrap schema dari `EnsureSchema()` pada startup.
+ID disimpan sebagai `TEXT` agar kompatibel dengan data existing (UUID/text mix) selama fase pengembangan.
 
 ### users
 
-- id (uuid, pk)
+- id (text, pk, default generated)
 - username (unique)
 - password
 - created_at
 
 ### rooms
 
-- id (uuid, pk)
+- id (text, pk, default generated)
 - name
 - type (`private` | `group`)
-- created_by (fk -> users.id)
+- created_by (text)
 - created_at
 
 ### room_members
 
-- user_id (fk -> users.id)
-- room_id (fk -> rooms.id)
+- user_id (text)
+- room_id (text)
 - joined_at
 - primary key (user_id, room_id)
 
 ### messages
 
-- id (uuid, pk)
-- room_id (fk -> rooms.id)
-- sender_id (fk -> users.id)
+- id (text, pk, default generated)
+- room_id (text)
+- sender_id (text)
 - content
 - file_url
 - type (`text` | `image` | `file`)
 - status (`sent` | `delivered` | `read`)
 - created_at
 
-Contoh SQL inisialisasi (karena folder migration masih kosong):
+Index:
 
-```sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username VARCHAR(50) NOT NULL UNIQUE,
-    password TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS rooms (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL,
-    type VARCHAR(20) NOT NULL DEFAULT 'group',
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS room_members (
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    room_id UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    joined_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, room_id)
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    room_id UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    content TEXT,
-    file_url TEXT,
-    type VARCHAR(20) NOT NULL DEFAULT 'text',
-    status VARCHAR(20) NOT NULL DEFAULT 'sent',
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_room_created_at
-ON messages(room_id, created_at);
-```
+- `idx_messages_room_created_at` pada `(room_id, created_at)`
 
 ## 7. Event System (WebSocket)
 
@@ -323,8 +314,11 @@ Gunakan event-based message dengan envelope standar:
 Event yang dipakai/direncanakan:
 
 - `join_room`
+- `join_room_ok` (dengan `resolved_room_id`)
+- `join_room_error`
 - `leave_room` (blueprint, belum aktif)
 - `send_message`
+- `send_message_error`
 - `receive_message`
 - `typing_start`
 - `typing_stop`
@@ -343,13 +337,16 @@ Client
 WebSocket Handler
    |
    v
-Usecase SendMessage
-   |
-   v
-Save to PostgreSQL
-   |
-   v
-Hub Broadcast
+Hub (validate room + build payload)
+        |
+        +-> Save to PostgreSQL (persist message)
+        |
+        +-> Redis Publish channel `chat`
+        |
+        +-> Redis Subscribe (all instances)
+        |
+        v
+Dispatch per room
    |
    v
 Clients receive_message
@@ -381,6 +378,7 @@ Clients receive_message
 
 - Go (disarankan 1.22+)
 - PostgreSQL 14+
+- Redis 6+
 
 ### Environment Variable
 
@@ -389,6 +387,7 @@ Buat file `.env` di root project:
 ```env
 DATABASE_URL=postgres://postgres:password@localhost:5432/chat_app?sslmode=disable
 BASE_URL=http://localhost:8080
+REDIS_ADDR=localhost:6379
 ```
 
 ### Jalankan Aplikasi
@@ -435,7 +434,8 @@ Server default berjalan di:
 ### 12.5 Horizontal Scaling
 
 - Pisahkan WebSocket gateway dari service logic
-- Gunakan pub/sub (Redis/NATS/Kafka) untuk cross-instance broadcast
+- Redis pub/sub sudah terpasang untuk cross-instance broadcast
+- Tahap lanjut: Redis cluster/sentinel + observability + retry policy
 
 ### 12.6 Storage Abstraction
 
@@ -460,5 +460,5 @@ Server default berjalan di:
 ### Phase 3
 
 - Group management (invite/kick/role)
-- Redis pub/sub
+- Redis hardening (cluster/sentinel, reconnect strategy, delivery tracking)
 - Observability (structured logging, metrics, tracing)
