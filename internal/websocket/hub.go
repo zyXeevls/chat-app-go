@@ -8,6 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/zyXeevls/chat-app/internal/repository"
+	"github.com/zyXeevls/chat-app/internal/usecase"
 )
 
 type Hub struct {
@@ -20,6 +21,7 @@ type Hub struct {
 
 	messageRepo *repository.MessageRepository
 	redis       *redis.Client
+	presence    *usecase.PresenceUseCase
 }
 
 type RoomMessage struct {
@@ -32,7 +34,7 @@ type RoomMessage struct {
 	Persist  bool   `json:"persist"`
 }
 
-func NewHub(repo *repository.MessageRepository, redisClient *redis.Client) *Hub {
+func NewHub(repo *repository.MessageRepository, redisClient *redis.Client, presenceUseCase *usecase.PresenceUseCase) *Hub {
 	return &Hub{
 		clients:     make(map[*Client]bool),
 		rooms:       make(map[string]map[*Client]bool),
@@ -41,6 +43,7 @@ func NewHub(repo *repository.MessageRepository, redisClient *redis.Client) *Hub 
 		broadcast:   make(chan *RoomMessage),
 		messageRepo: repo,
 		redis:       redisClient,
+		presence:    presenceUseCase,
 	}
 }
 
@@ -53,6 +56,9 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.clients[client] = true
+			if h.presence != nil {
+				h.presence.SetOnline(client.userID)
+			}
 
 			msg := []byte(`{
 				"event":"user_online",
@@ -67,6 +73,9 @@ func (h *Hub) Run() {
 
 		case client := <-h.unregister:
 			delete(h.clients, client)
+			if h.presence != nil {
+				h.presence.SetOffline(client.userID)
+			}
 
 			msg := []byte(`{
 				"event":"user_offline",

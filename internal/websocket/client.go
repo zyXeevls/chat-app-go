@@ -18,11 +18,27 @@ type Client struct {
 	joinedRooms map[string]bool
 }
 
+func (c *Client) touchPresence() {
+	if c.hub != nil && c.hub.presence != nil {
+		c.hub.presence.SetOnline(c.userID)
+	}
+}
+
+func (c *Client) setOffline() {
+	if c.hub != nil && c.hub.presence != nil {
+		c.hub.presence.SetOffline(c.userID)
+	}
+}
+
 func (c *Client) readPump() {
 	defer func() {
+		c.setOffline()
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
+
+	c.touchPresence()
+
 	for {
 		_, message, err := c.conn.ReadMessage()
 
@@ -30,6 +46,8 @@ func (c *Client) readPump() {
 			log.Println(err)
 			break
 		}
+
+		c.touchPresence()
 
 		var event Event
 
@@ -41,6 +59,15 @@ func (c *Client) readPump() {
 		}
 
 		switch event.Event {
+		case "presence_ping":
+			resp, _ := json.Marshal(map[string]interface{}{
+				"event": "presence_pong",
+				"data": map[string]interface{}{
+					"user_id": c.userID,
+				},
+			})
+			c.send <- resp
+
 		case "join_room":
 			var room struct {
 				RoomID string `json:"room_id"`
