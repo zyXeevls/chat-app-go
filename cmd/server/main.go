@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/joho/godotenv"
 	httpHandler "github.com/zyXeevls/chat-app/internal/delivery/http"
@@ -39,21 +40,26 @@ func main() {
 	unreadHandler := httpHandler.NewUnreadHandler(unreadUseCase)
 	authHandler := httpHandler.NewAuthHandler(authRepo)
 	fs := http.FileServer(http.Dir("./uploads"))
+	rateLimiter := httpHandler.NewIPRateLimiter(60, time.Minute)
+
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("/register", authHandler.Register)
+	apiMux.HandleFunc("/login", authHandler.Login)
+	apiMux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		websocket.ServeWs(hub, w, r)
+	})
+	apiMux.HandleFunc("/messages", msgHandler.GetMessage)
+	apiMux.HandleFunc("/upload", uploadHandler.UploadFile)
+	apiMux.HandleFunc("/presence", presenceHandler.GetStatus)
+	apiMux.HandleFunc("/unread", unreadHandler.GetUnread)
+	apiMux.HandleFunc("/unread/clear", unreadHandler.ClearUnread)
+
+	rootMux := http.NewServeMux()
+	rootMux.Handle("/api/v1/", http.StripPrefix("/api/v1", rateLimiter.Middleware(apiMux)))
+	rootMux.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
 
 	go hub.Run()
 
-	http.HandleFunc("/register", authHandler.Register)
-	http.HandleFunc("/login", authHandler.Login)
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		websocket.ServeWs(hub, w, r)
-	})
-	http.HandleFunc("/messages", msgHandler.GetMessage)
-	http.HandleFunc("/upload", uploadHandler.UploadFile)
-	http.HandleFunc("/presence", presenceHandler.GetStatus)
-	http.HandleFunc("/unread", unreadHandler.GetUnread)
-	http.HandleFunc("/unread/clear", unreadHandler.ClearUnread)
-	http.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
-
 	log.Println("Server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":8080", rootMux))
 }

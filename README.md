@@ -120,6 +120,8 @@ Server simpan ke storage
 Server kirim file URL lewat event websocket
 ```
 
+Dengan versioning API aktif, endpoint upload menjadi `POST /api/v1/upload`.
+
 Contoh payload pesan file:
 
 ```json
@@ -352,25 +354,53 @@ Dispatch per room
 Clients receive_message
 ```
 
-## 9. API dan Endpoint Saat Ini
+## 9. API dan Endpoint (Versioned)
+
+Base path API saat ini:
+
+- `/api/v1`
 
 ### Auth
 
-- `POST /register`
-- `POST /login`
+- `POST /api/v1/register`
+- `POST /api/v1/login`
 
 ### Realtime
 
-- `GET /ws?token=<jwt>`
+- WebSocket URL (recommended): `ws://localhost:8080/api/v1/ws?token=<jwt>`
+- Fallback untuk development/kompatibilitas client lama: `ws://localhost:8080/api/v1/ws?user_id=<id>`
+- Jika pakai HTTPS, gunakan `wss://`.
 
 ### Message History
 
-- `GET /messages?room_id=<id>&page=1&limit=20`
+- `GET /api/v1/messages?room_id=<id>&page=1&limit=20`
+
+### Presence
+
+- `GET /api/v1/presence?user_id=<id>`
+
+### Unread
+
+- `GET /api/v1/unread?user_id=<id>`
+- `POST /api/v1/unread/clear`
+  - Body JSON: `{ "user_id": "<id>", "room_id": "<id>" }`
 
 ### Upload
 
-- `POST /upload` (multipart form-data, key: `file`)
+- `POST /api/v1/upload` (multipart form-data, key: `file`)
 - Static file: `GET /uploads/<filename>`
+
+### Rate Limit
+
+Semua endpoint di bawah `/api/v1/*` dibatasi `60 request / menit` per IP.
+
+Catatan: koneksi WebSocket tetap melewati proses HTTP handshake terlebih dahulu, sehingga endpoint `/api/v1/ws` juga terkena rate limit pada tahap handshake.
+
+Header response yang tersedia:
+
+- `X-RateLimit-Limit`
+- `X-RateLimit-Remaining`
+- `Retry-After` (saat limit terlampaui)
 
 ## 10. Setup Lokal
 

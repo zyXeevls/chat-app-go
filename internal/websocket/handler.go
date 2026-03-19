@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	"github.com/zyXeevls/chat-app/pkg/utils"
@@ -15,16 +16,21 @@ var upgrader = websocket.Upgrader{
 
 func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
+	userID := ""
 
-	if token == "" {
-		http.Error(w, "token is required", 400)
-		return
-	}
-
-	userID, err := utils.ValidateToken(token)
-	if err != nil {
-		http.Error(w, "unauthorized", 401)
-		return
+	if token != "" {
+		validatedUserID, err := utils.ValidateToken(token)
+		if err != nil {
+			http.Error(w, "unauthorized", 401)
+			return
+		}
+		userID = validatedUserID
+	} else {
+		userID = strings.TrimSpace(r.URL.Query().Get("user_id"))
+		if userID == "" {
+			http.Error(w, "token or user_id is required", http.StatusBadRequest)
+			return
+		}
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
